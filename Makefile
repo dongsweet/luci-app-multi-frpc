@@ -11,14 +11,14 @@ else
 
 include $(TOPDIR)/rules.mk
 
-LUCI_TITLE:=LuCI for FRPC
-LUCI_DEPENDS:=+wget +frpc +luci-compat
+LUCI_TITLE:=LuCI support for multiple frpc clients
+LUCI_DEPENDS:=+frpc +luci-base
 LUCI_NAME:=luci-app-multi-frpc
 LUCI_PKGARCH:=all
 
 PKG_NAME:=luci-app-multi-frpc
 PKG_VERSION:=1.0.1
-PKG_RELEASE:=11
+PKG_RELEASE:=12
 
 define Package/$(PKG_NAME)/conffiles
 /etc/config/multi-frpc
