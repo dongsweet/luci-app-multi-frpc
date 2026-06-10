@@ -1,4 +1,4 @@
-local n = "frp"
+local n = "multi-frpc"
 local i = require "luci.dispatcher"
 local o = require "luci.model.network".init()
 local m = require "nixio.fs"
@@ -6,11 +6,11 @@ local a, t, e
 
 arg[1] = arg[1]or""
 
-a = Map("frp")
+a = Map("multi-frpc")
 a.title = translate("Frp Server Config")
-a.redirect = i.build_url("admin", "services", "frp")
+a.redirect = i.build_url("admin", "services", "multi-frpc")
 
-t = a:section(NamedSection, arg[1], "frp")
+t = a:section(NamedSection, arg[1], "server")
 t.title = translate("Config Server")
 t.addremove = false
 t.dynamic = false

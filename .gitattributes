@@ -1,0 +1,6 @@
+Makefile text eol=lf
+CHANGELOG text eol=lf
+README.md text eol=lf
+luasrc/** text eol=lf
+po/** text eol=lf
+root/** text eol=lf

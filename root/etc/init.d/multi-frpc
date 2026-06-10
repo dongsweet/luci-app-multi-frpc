@@ -1,0 +1,561 @@
+#!/bin/sh /etc/rc.common
+# Author: monokoo <realstones2012@gmail.com>
+# Thanks to FW867's help
+
+START=99
+USE_PROCD=1
+
+RESPAWN_THRESHOLD="${RESPAWN_THRESHOLD:-3600}"
+RESPAWN_TIMEOUT="${RESPAWN_TIMEOUT:-10}"
+RESPAWN_RETRY="${RESPAWN_RETRY:-60}"
+
+SERVICE_NAME="multi-frpc"
+CONFIG_NAME="multi-frpc"
+RUNDIR="/var/etc/multi-frpc"
+LOGFILE="$RUNDIR/multi-frpc.log"
+
+echo_date() {
+	local log="$1"
+	mkdir -p "$RUNDIR"
+	echo "$(date +%Y/%m/%d\ %X): $log" >> "$LOGFILE"
+}
+
+toml_quote() {
+	printf '"%s"' "$(printf '%s' "$1" | tr '\r\n' '  ' | sed 's/\\/\\\\/g; s/"/\\"/g')"
+}
+
+append_toml_string() {
+	local file="$1"
+	local key="$2"
+	local value="$3"
+
+	[ -n "$value" ] || return 0
+	printf '%s = %s\n' "$key" "$(toml_quote "$value")" >> "$file"
+}
+
+append_toml_int() {
+	local file="$1"
+	local key="$2"
+	local value="$3"
+
+	[ -n "$value" ] || return 0
+	printf '%s = %s\n' "$key" "$value" >> "$file"
+}
+
+append_toml_bool() {
+	local file="$1"
+	local key="$2"
+	local value="$3"
+
+	printf '%s = %s\n' "$key" "$value" >> "$file"
+}
+
+append_toml_bool_option() {
+	local section="$1"
+	local option="$2"
+	local default="$3"
+	local file="$4"
+	local key="${5:-$option}"
+	local value
+
+	config_get_bool value "$section" "$option" "$default"
+	if [ "$value" -eq 0 ]; then
+		append_toml_bool "$file" "$key" "false"
+	else
+		append_toml_bool "$file" "$key" "true"
+	fi
+}
+
+render_toml_array() {
+	printf '%s' "$1" | tr ',\r' '\n\n' | sed 's/^[[:space:]]*locations=//' | awk '
+		BEGIN {
+			first = 1
+			printf("[")
+		}
+		{
+			gsub(/^[ \t]+|[ \t]+$/, "", $0)
+			if (length($0) > 0) {
+				gsub(/\\/, "\\\\", $0)
+				gsub(/"/, "\\\"", $0)
+				if (!first) {
+					printf(", ")
+				}
+				printf("\"%s\"", $0)
+				first = 0
+			}
+		}
+		END {
+			printf("]")
+		}
+	'
+}
+
+append_toml_array() {
+	local file="$1"
+	local key="$2"
+	local raw="$3"
+	local rendered
+
+	[ -n "$raw" ] || return 0
+	rendered="$(render_toml_array "$raw")"
+	[ "$rendered" = "[]" ] && return 0
+	printf '%s = %s\n' "$key" "$rendered" >> "$file"
+}
+
+_exclude_server_match=1
+_exclude_server_target=""
+
+exclude_server_match_cb() {
+	[ "$1" = "$_exclude_server_target" ] && _exclude_server_match=0
+}
+
+is_server_excluded() {
+	local proxy_cfg="$1"
+	local server_cfg="$2"
+
+	_exclude_server_target="$server_cfg"
+	_exclude_server_match=1
+	config_list_foreach "$proxy_cfg" exclude_server exclude_server_match_cb
+	[ "$_exclude_server_match" -eq 0 ]
+}
+
+append_proxy_transport() {
+	local cfg="$1"
+	local file="$2"
+	local proxy_protocol_version
+
+	config_get proxy_protocol_version "$cfg" proxy_protocol_version
+
+	append_toml_bool_option "$cfg" use_encryption 0 "$file" "transport.useEncryption"
+	append_toml_bool_option "$cfg" use_compression 0 "$file" "transport.useCompression"
+
+	if [ -n "$proxy_protocol_version" ] && [ "$proxy_protocol_version" != "disable" ]; then
+		append_toml_string "$file" "transport.proxyProtocolVersion" "$proxy_protocol_version"
+	fi
+}
+
+append_proxy_health_check() {
+	local cfg="$1"
+	local file="$2"
+	local enabled health_check_type health_check_path health_check_interval health_check_timeout health_check_max_failed
+
+	config_get_bool enabled "$cfg" enable_health_check 0
+	[ "$enabled" -gt 0 ] || return 0
+
+	config_get health_check_type "$cfg" health_check_type "tcp"
+	config_get health_check_path "$cfg" health_check_path "/"
+	config_get health_check_interval "$cfg" health_check_interval "10"
+	config_get health_check_timeout "$cfg" health_check_timeout "3"
+	config_get health_check_max_failed "$cfg" health_check_max_failed "1"
+
+	append_toml_string "$file" "healthCheck.type" "$health_check_type"
+	if [ "$health_check_type" = "http" ]; then
+		append_toml_string "$file" "healthCheck.path" "${health_check_path:-/}"
+	fi
+	append_toml_int "$file" "healthCheck.intervalSeconds" "$health_check_interval"
+	append_toml_int "$file" "healthCheck.timeoutSeconds" "$health_check_timeout"
+	append_toml_int "$file" "healthCheck.maxFailed" "$health_check_max_failed"
+}
+
+append_tcp_plugin() {
+	local cfg="$1"
+	local file="$2"
+	local enabled plugin enable_auth plugin_http_user plugin_http_passwd plugin_unix_path
+
+	config_get_bool enabled "$cfg" enable_plugin 0
+	[ "$enabled" -gt 0 ] || return 1
+
+	config_get plugin "$cfg" plugin
+	[ -n "$plugin" ] || return 1
+
+	printf '[proxies.plugin]\n' >> "$file"
+	append_toml_string "$file" "type" "$plugin"
+
+	case "$plugin" in
+		http_proxy)
+			config_get_bool enable_auth "$cfg" enable_plugin_httpuserpw 0
+			if [ "$enable_auth" -gt 0 ]; then
+				config_get plugin_http_user "$cfg" plugin_http_user
+				config_get plugin_http_passwd "$cfg" plugin_http_passwd
+				append_toml_string "$file" "httpUser" "$plugin_http_user"
+				append_toml_string "$file" "httpPassword" "$plugin_http_passwd"
+			fi
+		;;
+		unix_domain_socket)
+			config_get plugin_unix_path "$cfg" plugin_unix_path
+			append_toml_string "$file" "unixPath" "$plugin_unix_path"
+		;;
+	esac
+
+	return 0
+}
+
+append_https_plugin() {
+	local cfg="$1"
+	local file="$2"
+	local enabled https_plugin plugin_local_addr plugin_crt_path plugin_key_path plugin_host_header_rewrite plugin_header_X_From_Where
+
+	config_get_bool enabled "$cfg" enable_https_plugin 0
+	[ "$enabled" -gt 0 ] || return 1
+
+	config_get https_plugin "$cfg" https_plugin
+	[ -n "$https_plugin" ] || return 1
+
+	printf '[proxies.plugin]\n' >> "$file"
+	append_toml_string "$file" "type" "$https_plugin"
+
+	config_get plugin_local_addr "$cfg" plugin_local_addr
+	config_get plugin_crt_path "$cfg" plugin_crt_path
+	config_get plugin_key_path "$cfg" plugin_key_path
+	config_get plugin_host_header_rewrite "$cfg" plugin_host_header_rewrite
+	config_get plugin_header_X_From_Where "$cfg" plugin_header_X_From_Where
+
+	append_toml_string "$file" "localAddr" "$plugin_local_addr"
+	append_toml_string "$file" "crtPath" "$plugin_crt_path"
+	append_toml_string "$file" "keyPath" "$plugin_key_path"
+	append_toml_string "$file" "hostHeaderRewrite" "$plugin_host_header_rewrite"
+
+	if [ -n "$plugin_header_X_From_Where" ]; then
+		printf '[proxies.plugin.requestHeaders.set]\n' >> "$file"
+		append_toml_string "$file" "x-from-where" "$plugin_header_X_From_Where"
+	fi
+
+	return 0
+}
+
+append_proxy_entry() {
+	local cfg="$1"
+	local file="$2"
+	local type="$3"
+	local remark="$4"
+	local domain_type custom_domains subdomain remote_port local_ip local_port locations
+	local http_user http_pwd host_header_rewrite enable_locations enable_http_auth enable_host_header_rewrite
+	local stcp_role stcp_secretkey xtcp_role xtcp_secretkey
+
+	printf '\n[[proxies]]\n' >> "$file"
+	append_toml_string "$file" "name" "$remark"
+	append_toml_string "$file" "type" "$type"
+
+	config_get local_ip "$cfg" local_ip
+	config_get local_port "$cfg" local_port
+	config_get remote_port "$cfg" remote_port
+
+	case "$type" in
+		http|https)
+			config_get domain_type "$cfg" domain_type
+			config_get custom_domains "$cfg" custom_domains
+			config_get subdomain "$cfg" subdomain
+
+			case "$domain_type" in
+				custom_domains)
+					append_toml_array "$file" "customDomains" "$custom_domains"
+				;;
+				subdomain)
+					append_toml_string "$file" "subdomain" "$subdomain"
+				;;
+				both_dtype)
+					append_toml_array "$file" "customDomains" "$custom_domains"
+					append_toml_string "$file" "subdomain" "$subdomain"
+				;;
+				*)
+					append_toml_array "$file" "customDomains" "$custom_domains"
+					append_toml_string "$file" "subdomain" "$subdomain"
+				;;
+			esac
+
+			if [ "$type" = "https" ] && append_https_plugin "$cfg" "$file"; then
+				:
+			else
+				append_toml_string "$file" "localIP" "$local_ip"
+				append_toml_int "$file" "localPort" "$local_port"
+			fi
+
+			config_get_bool enable_locations "$cfg" enable_locations 0
+			if [ "$enable_locations" -gt 0 ]; then
+				config_get locations "$cfg" locations
+				append_toml_array "$file" "locations" "$locations"
+			fi
+
+			config_get_bool enable_http_auth "$cfg" enable_http_auth 0
+			if [ "$enable_http_auth" -gt 0 ]; then
+				config_get http_user "$cfg" http_user
+				config_get http_pwd "$cfg" http_pwd
+				append_toml_string "$file" "httpUser" "$http_user"
+				append_toml_string "$file" "httpPassword" "$http_pwd"
+			fi
+
+			config_get_bool enable_host_header_rewrite "$cfg" enable_host_header_rewrite 0
+			if [ "$enable_host_header_rewrite" -gt 0 ]; then
+				config_get host_header_rewrite "$cfg" host_header_rewrite
+				append_toml_string "$file" "hostHeaderRewrite" "$host_header_rewrite"
+			fi
+		;;
+		tcp)
+			append_toml_int "$file" "remotePort" "$remote_port"
+			if append_tcp_plugin "$cfg" "$file"; then
+				:
+			else
+				append_toml_string "$file" "localIP" "$local_ip"
+				append_toml_int "$file" "localPort" "$local_port"
+			fi
+		;;
+		udp)
+			append_toml_int "$file" "remotePort" "$remote_port"
+			append_toml_string "$file" "localIP" "$local_ip"
+			append_toml_int "$file" "localPort" "$local_port"
+		;;
+		stcp)
+			config_get stcp_secretkey "$cfg" stcp_secretkey
+			append_toml_string "$file" "localIP" "$local_ip"
+			append_toml_int "$file" "localPort" "$local_port"
+			append_toml_string "$file" "secretKey" "$stcp_secretkey"
+		;;
+		xtcp)
+			config_get xtcp_secretkey "$cfg" xtcp_secretkey
+			append_toml_string "$file" "localIP" "$local_ip"
+			append_toml_int "$file" "localPort" "$local_port"
+			append_toml_string "$file" "secretKey" "$xtcp_secretkey"
+		;;
+	esac
+
+	append_proxy_transport "$cfg" "$file"
+	append_proxy_health_check "$cfg" "$file"
+}
+
+append_visitor_entry() {
+	local cfg="$1"
+	local file="$2"
+	local type="$3"
+	local remark="$4"
+	local local_ip local_port server_name secretkey
+
+	config_get local_ip "$cfg" local_ip
+	config_get local_port "$cfg" local_port
+
+	printf '\n[[visitors]]\n' >> "$file"
+	append_toml_string "$file" "name" "$remark"
+	append_toml_string "$file" "type" "$type"
+
+	case "$type" in
+		stcp)
+			config_get server_name "$cfg" stcp_servername
+			config_get secretkey "$cfg" stcp_secretkey
+		;;
+		xtcp)
+			config_get server_name "$cfg" xtcp_servername
+			config_get secretkey "$cfg" xtcp_secretkey
+		;;
+	esac
+
+	append_toml_string "$file" "serverName" "$server_name"
+	append_toml_string "$file" "secretKey" "$secretkey"
+	append_toml_string "$file" "bindAddr" "$local_ip"
+	append_toml_int "$file" "bindPort" "$local_port"
+	append_toml_bool_option "$cfg" use_encryption 0 "$file" "transport.useEncryption"
+	append_toml_bool_option "$cfg" use_compression 0 "$file" "transport.useCompression"
+}
+
+append_service_to_server() {
+	local cfg="$1"
+	local server_cfg="$2"
+	local file="$3"
+	local enable type remark stcp_role xtcp_role
+
+	config_get_bool enable "$cfg" enable 1
+	[ "$enable" -gt 0 ] || return 1
+
+	is_server_excluded "$cfg" "$server_cfg" && return 1
+
+	config_get type "$cfg" type
+	config_get remark "$cfg" remark
+	config_get stcp_role "$cfg" stcp_role
+	config_get xtcp_role "$cfg" xtcp_role
+
+	[ -n "$remark" ] && [ -n "$type" ] || return 1
+
+	case "$type" in
+		stcp)
+			if [ "$stcp_role" = "visitor" ]; then
+				append_visitor_entry "$cfg" "$file" "$type" "$remark"
+			else
+				append_proxy_entry "$cfg" "$file" "$type" "$remark"
+			fi
+		;;
+		xtcp)
+			if [ "$xtcp_role" = "visitor" ]; then
+				append_visitor_entry "$cfg" "$file" "$type" "$remark"
+			else
+				append_proxy_entry "$cfg" "$file" "$type" "$remark"
+			fi
+		;;
+		*)
+			append_proxy_entry "$cfg" "$file" "$type" "$remark"
+		;;
+	esac
+
+	INSTANCE_HAS_SERVICE=1
+	return 0
+}
+
+build_server_config() {
+	local cfg="$1"
+	local dir="$2"
+	local server_addr server_port token user server_name enabled
+	local enable_cpool pool_count log_level log_max_days login_fail_exit http_proxy protocol
+	local admin_enable admin_port admin_user admin_pwd tls_enable enable_http_proxy
+	local enable_custom_certificate tls_cert_file tls_key_file tls_trusted_ca_file
+	local tcp_mux_keepalive_interval heartbeat_interval heartbeat_timeout
+	local file
+
+	config_get server_name "$cfg" name
+	config_get_bool enabled "$cfg" enabled 0
+
+	[ -n "$server_name" ] || return 1
+	if [ "$enabled" -lt 1 ]; then
+		echo_date "服务端 $server_name 被禁用"
+		return 1
+	fi
+
+	config_get server_addr "$cfg" server_addr
+	config_get server_port "$cfg" server_port
+	config_get token "$cfg" token
+	config_get user "$cfg" user
+
+	file="$dir/frpc-$server_name.toml"
+	echo_date "正在创建 $server_name 的 TOML 配置文件"
+
+	: > "$file"
+
+	append_toml_string "$file" "serverAddr" "$server_addr"
+	append_toml_int "$file" "serverPort" "$server_port"
+	append_toml_string "$file" "user" "$user"
+	append_toml_string "$file" "auth.method" "token"
+	append_toml_string "$file" "auth.token" "$token"
+	append_toml_string "$file" "log.to" "$RUNDIR/frpc-$server_name.log"
+
+	config_get log_level common log_level "info"
+	config_get log_max_days common log_max_days "3"
+	config_get protocol common protocol "tcp"
+	config_get_bool login_fail_exit common login_fail_exit 0
+	config_get_bool enable_http_proxy common enable_http_proxy 0
+	config_get http_proxy common http_proxy
+	config_get_bool enable_cpool common enable_cpool 0
+	config_get pool_count common pool_count "1"
+	config_get_bool admin_enable common admin_enable 0
+	config_get admin_port common admin_port
+	config_get admin_user common admin_user
+	config_get admin_pwd common admin_pwd
+	config_get_bool tls_enable common tls_enable 1
+	config_get_bool enable_custom_certificate common enable_custom_certificate 0
+	config_get tls_cert_file common tls_cert_file
+	config_get tls_key_file common tls_key_file
+	config_get tls_trusted_ca_file common tls_trusted_ca_file
+	config_get tcp_mux_keepalive_interval common tcp_mux_keepalive_interval
+	config_get heartbeat_interval common heartbeat_interval
+	config_get heartbeat_timeout common heartbeat_timeout
+
+	append_toml_string "$file" "log.level" "$log_level"
+	append_toml_int "$file" "log.maxDays" "$log_max_days"
+	append_toml_string "$file" "transport.protocol" "$protocol"
+	append_toml_bool_option common login_fail_exit 0 "$file" "loginFailExit"
+	append_toml_bool_option common tcp_mux 1 "$file" "transport.tcpMux"
+	append_toml_bool_option common tls_enable 1 "$file" "transport.tls.enable"
+
+	[ "$enable_http_proxy" -gt 0 ] && append_toml_string "$file" "transport.proxyURL" "$http_proxy"
+	[ "$enable_cpool" -gt 0 ] && append_toml_int "$file" "transport.poolCount" "$pool_count"
+	append_toml_int "$file" "transport.tcpMuxKeepaliveInterval" "$tcp_mux_keepalive_interval"
+	append_toml_int "$file" "transport.heartbeatInterval" "$heartbeat_interval"
+	append_toml_int "$file" "transport.heartbeatTimeout" "$heartbeat_timeout"
+
+	if [ "$tls_enable" -gt 0 ] && [ "$enable_custom_certificate" -gt 0 ]; then
+		append_toml_string "$file" "transport.tls.certFile" "$tls_cert_file"
+		append_toml_string "$file" "transport.tls.keyFile" "$tls_key_file"
+		append_toml_string "$file" "transport.tls.trustedCaFile" "$tls_trusted_ca_file"
+	fi
+
+	if [ "$admin_enable" -gt 0 ] && [ -n "$admin_port" ]; then
+		append_toml_string "$file" "webServer.addr" "0.0.0.0"
+		append_toml_int "$file" "webServer.port" "$admin_port"
+		append_toml_string "$file" "webServer.user" "$admin_user"
+		append_toml_string "$file" "webServer.password" "$admin_pwd"
+	fi
+
+	INSTANCE_HAS_SERVICE=0
+	config_foreach append_service_to_server proxy "$cfg" "$file"
+
+	if [ "$INSTANCE_HAS_SERVICE" -eq 0 ]; then
+		rm -f "$file"
+		echo_date "服务端 $server_name 没有可用服务，已跳过"
+		return 1
+	fi
+
+	INSTANCE_COUNT=$((INSTANCE_COUNT + 1))
+	return 0
+}
+
+boot() {
+	sleep 10s
+	start
+}
+
+service_triggers() {
+	procd_add_reload_trigger "$CONFIG_NAME"
+	procd_add_reload_interface_trigger wan
+}
+
+start_service() {
+	config_load "$CONFIG_NAME"
+
+	local enabled
+	config_get_bool enabled common enabled 1
+	[ "$enabled" -gt 0 ] || return 1
+
+	mkdir -p "$RUNDIR"
+	touch "$LOGFILE"
+
+	if [ ! -x "/usr/bin/frpc" ]; then
+		logger -t MULTI-FRPC 'frpc binary not found.'
+		echo_date "未找到 /usr/bin/frpc，请先安装 frpc 软件包"
+		return 1
+	fi
+
+	rm -f "$RUNDIR"/frpc-*.toml
+
+	INSTANCE_COUNT=0
+	config_foreach build_server_config server "$RUNDIR"
+
+	if [ "$INSTANCE_COUNT" -eq 0 ]; then
+		echo_date "multi-frpc 服务启动失败，没有生成任何可用实例配置"
+		return 1
+	fi
+
+	config_foreach start_instance server "$RUNDIR"
+	return 0
+}
+
+start_instance() {
+	local config="$1"
+	local server_name file
+
+	config_get server_name "$config" name
+	[ -n "$server_name" ] || return 1
+
+	file="$2/frpc-$server_name.toml"
+	[ -f "$file" ] || return 1
+
+	logger -t MULTI-FRPC "Starting frpc instance $server_name"
+	echo_date "正在启动 Frp 客户端: $server_name"
+
+	procd_open_instance "$server_name"
+	procd_set_param command /usr/bin/frpc -c "$file"
+	procd_set_param respawn "$RESPAWN_THRESHOLD" "$RESPAWN_TIMEOUT" "$RESPAWN_RETRY"
+	procd_set_param file "$file"
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+stop_service() {
+	logger -t MULTI-FRPC 'Shutting down multi-frpc service'
+	echo_date "停止所有 Frp 客户端"
+}

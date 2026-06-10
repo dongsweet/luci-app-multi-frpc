@@ -2,17 +2,17 @@ local o = require "luci.dispatcher"
 local e = require ("luci.model.ipkg")
 local s = require "nixio.fs"
 local e = luci.model.uci.cursor()
-local i = "frp"
+local i = "multi-frpc"
 local a, t, e
 local n = {}
 
-a = Map("frp")
-a.title = translate("Frp Setting")
+a = Map("multi-frpc")
+a.title = translate("Multi Frpc Setting")
 a.description = translate("Frp is a fast reverse proxy to help you expose a local server behind a NAT or firewall to the internet.")
 
 a:section(SimpleSection).template  = "frp/frp_status"
 
-t = a:section(NamedSection, "common", "frp")
+t = a:section(NamedSection, "common", "multi-frpc")
 t.anonymous = true
 t.addremove = false
 
@@ -30,12 +30,6 @@ e = t:taboption("base", Value, "vhost_https_port", translate("Vhost HTTPS Port")
 e.datatype = "port"
 e.rmempty = false
 
-e = t:taboption("base", Value, "time", translate("Service registration interval"))
-e.description = translate("0 means disable this feature, unit: min")
-e.datatype = "range(0,59)"
-e.default = 30
-e.rmempty = false
-
 -- Other
 
 e = t:taboption("other", Flag, "login_fail_exit", translate("Exit program when first login failed"))
@@ -50,7 +44,7 @@ e.rmempty = false
 
 e = t:taboption("other", Flag, "tls_enable", translate("Use TLS Connection"))
 e.description = translate("if tls_enable is true, frpc will connect frps by tls.")
-e.default = "0"
+e.default = "1"
 e.rmempty = false
 
 e = t:taboption("other", Flag, "enable_custom_certificate", translate("Custom TLS Protocol Encryption"))
@@ -61,19 +55,19 @@ e:depends("tls_enable", 1)
 
 e = t:taboption("other", Value, "tls_cert_file", translate("Client Certificate File"))
 e.description = translate("Frps one-way verifies the identity of frpc.")
-e.placeholder = "/var/etc/frp/client.crt"
+e.placeholder = "/var/etc/multi-frpc/client.crt"
 e.optional = false
 e:depends("enable_custom_certificate", 1)
 
 e = t:taboption("other", Value, "tls_key_file", translate("Client Key File"))
 e.description = translate("Frps one-way verifies the identity of frpc.")
-e.placeholder = "/var/etc/frp/client.key"
+e.placeholder = "/var/etc/multi-frpc/client.key"
 e.optional = false
 e:depends("enable_custom_certificate", 1)
 
 e = t:taboption("other", Value, "tls_trusted_ca_file", translate("CA Certificate File"))
 e.description = translate("Frpc one-way verifies the identity of frps.")
-e.placeholder = "/var/etc/frp/ca.crt"
+e.placeholder = "/var/etc/multi-frpc/ca.crt"
 e.optional = false
 e:depends("enable_custom_certificate", 1)
 
@@ -82,6 +76,21 @@ e.description = translate("Frp support kcp protocol since v0.12.0")
 e.default = "tcp"
 e:value("tcp", translate("TCP Protocol"))
 e:value("kcp", translate("KCP Protocol"))
+e:value("quic", translate("QUIC Protocol"))
+e:value("websocket", translate("WebSocket Protocol"))
+e:value("wss", translate("WebSocket over TLS"))
+
+e = t:taboption("other", Value, "tcp_mux_keepalive_interval", translate("TCP Mux Keepalive Interval"))
+e.description = translate("Optional. Unit: seconds. Used by frpc to actively detect whether multiplexed connections are still healthy.")
+e.datatype = "integer"
+
+e = t:taboption("other", Value, "heartbeat_interval", translate("Heartbeat Interval"))
+e.description = translate("Optional. Unit: seconds. Set how often frpc sends heartbeat packets to frps.")
+e.datatype = "integer"
+
+e = t:taboption("other", Value, "heartbeat_timeout", translate("Heartbeat Timeout"))
+e.description = translate("Optional. Unit: seconds. Set how long frpc waits before considering heartbeat to frps timed out.")
+e.datatype = "uinteger"
 
 e = t:taboption("other", Flag, "enable_http_proxy", translate("Connect frps by HTTP PROXY"))
 e.description = translate("frpc can connect frps using HTTP PROXY")
@@ -147,7 +156,7 @@ t = a:section(TypedSection, "server", translate("Server List"))
 t.anonymous = true
 t.addremove = true
 t.template = "cbi/tblsection"
-t.extedit = o.build_url("admin", "services", "frp", "server", "%s")
+t.extedit = o.build_url("admin", "services", "multi-frpc", "server", "%s")
 
 function t.create(e,t)
     new = TypedSection.create(e,t)
@@ -157,7 +166,7 @@ end
 function t.remove(e,t)
     e.map.proceed = true
     e.map:del(t)
-    luci.http.redirect(o.build_url("admin","services","frp"))
+    luci.http.redirect(o.build_url("admin","services","multi-frpc"))
 end
 
 e = t:option(DummyValue, "name", translate("Server Remark Name"))
@@ -181,7 +190,7 @@ t = a:section(TypedSection, "proxy", translate("Services List"))
 t.anonymous = true
 t.addremove = true
 t.template = "cbi/tblsection"
-t.extedit = o.build_url("admin", "services", "frp", "config", "%s")
+t.extedit = o.build_url("admin", "services", "multi-frpc", "config", "%s")
 
 function t.create(e,t)
 new = TypedSection.create(e,t)
@@ -191,7 +200,7 @@ end
 function t.remove(e,t)
 e.map.proceed = true
 e.map:del(t)
-luci.http.redirect(o.build_url("admin","services","frp"))
+luci.http.redirect(o.build_url("admin","services","multi-frpc"))
 end
 
 local o = ""

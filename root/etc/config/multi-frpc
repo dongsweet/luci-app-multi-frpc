@@ -1,11 +1,11 @@
 
-config frp 'common'
+config multi-frpc 'common'
 	option enabled '0'
 	option log_max_days '3'
 	option login_fail_exit '0'
 	option enable_cpool '0'
-	option time '40'
 	option tcp_mux '1'
+	option tls_enable '1'
 	option enable_http_proxy '0'
 	option vhost_http_port '80'
 	option vhost_https_port '443'

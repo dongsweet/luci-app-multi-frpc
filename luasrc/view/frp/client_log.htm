@@ -21,7 +21,7 @@
     document.getElementById("reload").addEventListener("click", () => {
         startRecieveLog(current)
     })
-    XHR.get('<%=url([[admin]], [[services]], [[frp]], [[server_list]])%>', null, function(x, data) {
+    XHR.get('<%=url([[admin]], [[services]], [[multi-frpc]], [[server_list]])%>', null, function(x, data) {
         const dt = Array.from(data)
         dt.forEach(node => {
             tb.innerHTML += `<option value="${node}">${node}</option>`
@@ -33,7 +33,7 @@
         }
     })
     function startRecieveLog(log) {
-        XHR.get('<%=url([[admin]], [[services]], [[frp]], [[get_log]])%>', {name: log},
+        XHR.get('<%=url([[admin]], [[services]], [[multi-frpc]], [[get_log]])%>', {name: log},
             function(x, data) {
                 var tb = document.getElementById('content');
                 tb.value = x.responseText
