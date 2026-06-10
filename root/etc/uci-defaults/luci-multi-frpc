@@ -1,5 +1,135 @@
 #!/bin/sh
 
+CONFIG_NAME="multi-frpc"
+INSTANCE_OPTIONS="
+protocol
+login_fail_exit
+tcp_mux
+tcp_mux_keepalive_interval
+heartbeat_interval
+heartbeat_timeout
+tls_enable
+enable_custom_certificate
+tls_cert_file
+tls_key_file
+tls_trusted_ca_file
+enable_http_proxy
+http_proxy
+enable_cpool
+pool_count
+log_level
+log_max_days
+admin_enable
+admin_port
+admin_user
+admin_pwd
+"
+
+. /lib/functions.sh
+
+changed=0
+
+generate_server_key() {
+	local cfg="$1"
+	local name addr port seed
+
+	name="$(uci -q get "$CONFIG_NAME.$cfg.name" 2>/dev/null)"
+	addr="$(uci -q get "$CONFIG_NAME.$cfg.server_addr" 2>/dev/null)"
+	port="$(uci -q get "$CONFIG_NAME.$cfg.server_port" 2>/dev/null)"
+	seed="${cfg}-${name}-${addr}-${port}-$(date +%s)-$$"
+
+	if command -v md5sum >/dev/null 2>&1; then
+		printf '%s' "$seed" | md5sum | awk '{ print substr($1, 1, 12) }'
+	else
+		printf '%s' "$(date +%s)-$$"
+	fi
+}
+
+remember_server_key() {
+	local cfg="$1"
+	local key
+
+	key="$(uci -q get "$CONFIG_NAME.$cfg.server_key" 2>/dev/null)"
+	if [ -z "$key" ]; then
+		key="$(generate_server_key "$cfg")"
+		uci -q set "$CONFIG_NAME.$cfg.server_key=$key"
+		changed=1
+	fi
+
+	eval "SERVER_KEY_$cfg='$key'"
+}
+
+copy_legacy_common_options() {
+	local cfg="$1"
+	local opt legacy
+
+	for opt in $INSTANCE_OPTIONS; do
+		if uci -q get "$CONFIG_NAME.$cfg.$opt" >/dev/null 2>&1; then
+			continue
+		fi
+
+		legacy="$(uci -q get "$CONFIG_NAME.common.$opt" 2>/dev/null)"
+		[ -n "$legacy" ] || continue
+
+		uci -q set "$CONFIG_NAME.$cfg.$opt=$legacy"
+		changed=1
+	done
+}
+
+EXCLUDE_VALUES=""
+
+collect_exclude_value() {
+	EXCLUDE_VALUES="${EXCLUDE_VALUES}${EXCLUDE_VALUES:+ }$1"
+}
+
+map_legacy_excludes() {
+	local cfg="$1"
+	local value key mapped changed_local new_values
+
+	EXCLUDE_VALUES=""
+	config_list_foreach "$cfg" exclude_server collect_exclude_value
+	[ -n "$EXCLUDE_VALUES" ] || return 0
+
+	changed_local=0
+	new_values=""
+
+	for value in $EXCLUDE_VALUES; do
+		key=""
+		eval "key=\${SERVER_KEY_$value}"
+		if [ -n "$key" ]; then
+			mapped="$key"
+			changed_local=1
+		else
+			mapped="$value"
+		fi
+
+		case " $new_values " in
+			*" $mapped "*) ;;
+			*) new_values="${new_values}${new_values:+ }$mapped" ;;
+		esac
+	done
+
+	[ "$changed_local" -eq 1 ] || return 0
+
+	uci -q delete "$CONFIG_NAME.$cfg.exclude_server"
+	for value in $new_values; do
+		uci -q add_list "$CONFIG_NAME.$cfg.exclude_server=$value"
+	done
+
+	changed=1
+}
+
+drop_legacy_common_options() {
+	local opt
+
+	for opt in vhost_http_port vhost_https_port $INSTANCE_OPTIONS; do
+		if uci -q get "$CONFIG_NAME.common.$opt" >/dev/null 2>&1; then
+			uci -q delete "$CONFIG_NAME.common.$opt"
+			changed=1
+		fi
+	done
+}
+
 rm -f /etc/rc.d/S??frp /etc/rc.d/K??frp
 
 uci -q batch <<-EOF >/dev/null
@@ -9,6 +139,14 @@ uci -q batch <<-EOF >/dev/null
 	set ucitrack.@multi-frpc[-1].init=multi-frpc
 	commit ucitrack
 EOF
+
+config_load "$CONFIG_NAME"
+config_foreach remember_server_key server
+config_foreach copy_legacy_common_options server
+config_foreach map_legacy_excludes proxy
+drop_legacy_common_options
+
+[ "$changed" -eq 0 ] || uci -q commit "$CONFIG_NAME"
 
 rm -f /tmp/luci-indexcache
 rm -rf /tmp/luci-modulecache/

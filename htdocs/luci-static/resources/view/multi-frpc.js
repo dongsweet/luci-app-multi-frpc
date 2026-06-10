@@ -44,6 +44,110 @@ function serverLabel(section) {
 	return addr ? '%s (%s)'.format(label, addr) : label;
 }
 
+function serverKey(section_id) {
+	return uci.get(CONFIG, section_id, 'server_key') || section_id;
+}
+
+function generateServerKey(section_id) {
+	var seed = '%s-%s-%s'.format(
+		section_id,
+		Date.now().toString(36),
+		Math.random().toString(36).slice(2, 8)
+	);
+
+	return seed.replace(/[^a-z0-9_-]/ig, '').slice(0, 16);
+}
+
+function listValue(value) {
+	if (Array.isArray(value))
+		return value.filter(function(entry) { return entry != null && entry !== ''; });
+
+	if (value == null || value === '')
+		return [];
+
+	return [ value ];
+}
+
+function uniqueValues(values) {
+	var result = [];
+
+	for (var i = 0; i < values.length; i++)
+		if (result.indexOf(values[i]) === -1)
+			result.push(values[i]);
+
+	return result;
+}
+
+function normalizeConfigState() {
+	var changed = false;
+	var keyBySection = {};
+	var servers = uci.sections(CONFIG, 'server');
+	var proxies = uci.sections(CONFIG, 'proxy');
+
+	for (var i = 0; i < servers.length; i++) {
+		var section_id = servers[i]['.name'];
+		var key = uci.get(CONFIG, section_id, 'server_key');
+
+		if (!key) {
+			key = generateServerKey(section_id);
+			uci.set(CONFIG, section_id, 'server_key', key);
+			changed = true;
+		}
+
+		keyBySection[section_id] = key;
+	}
+
+	for (var j = 0; j < proxies.length; j++) {
+		var proxy_id = proxies[j]['.name'];
+		var excludes = listValue(uci.get(CONFIG, proxy_id, 'exclude_server'));
+		var mapped = [];
+
+		for (var k = 0; k < excludes.length; k++)
+			mapped.push(keyBySection[excludes[k]] || excludes[k]);
+
+		mapped = uniqueValues(mapped);
+
+		if (JSON.stringify(excludes) !== JSON.stringify(mapped)) {
+			uci.set(CONFIG, proxy_id, 'exclude_server', mapped);
+			changed = true;
+		}
+	}
+
+	return changed;
+}
+
+function getInheritedServerValue(section_id, option, defaultValue) {
+	var value = uci.get(CONFIG, section_id, option);
+
+	if (value != null && value !== '')
+		return value;
+
+	value = uci.get(CONFIG, 'common', option);
+
+	if (value != null && value !== '')
+		return value;
+
+	return defaultValue;
+}
+
+function applyInheritedServerOption(option, optionName, defaultValue) {
+	option.cfgvalue = function(section_id) {
+		return getInheritedServerValue(section_id, optionName, defaultValue);
+	};
+}
+
+function buildServerNameMap() {
+	var map = {};
+	var servers = uci.sections(CONFIG, 'server');
+
+	for (var i = 0; i < servers.length; i++) {
+		var section_id = servers[i]['.name'];
+		map[serverKey(section_id)] = serverLabel(servers[i]);
+	}
+
+	return map;
+}
+
 function getServiceInstances(data) {
 	var service = data && data[SERVICE];
 	return (service && service.instances) ? service.instances : {};
@@ -57,7 +161,7 @@ function isAnyInstanceRunning(instances) {
 	return false;
 }
 
-function renderStatus(instances) {
+function renderStatus(instances, serverNames) {
 	var rows = [];
 	var running = isAnyInstanceRunning(instances);
 
@@ -69,7 +173,7 @@ function renderStatus(instances) {
 			command = command.join(' ');
 
 		rows.push([
-			name,
+			serverNames[name] || name,
 			inst.running ? _('RUNNING') : _('NOT RUNNING'),
 			command || ''
 		]);
@@ -134,121 +238,10 @@ function renderLog(title, content) {
 function addCommonOptions(section) {
 	var o;
 
-	section.tab('base', _('Basic Settings'));
-	section.tab('transport', _('Transport'));
-	section.tab('log', _('Log and Admin'));
-
-	o = section.taboption('base', form.Flag, 'enabled', _('Enabled'));
+	o = section.option(form.Flag, 'enabled', _('Enabled'));
 	o.default = '0';
 	o.rmempty = false;
-
-	o = section.taboption('base', form.Value, 'vhost_http_port', _('Vhost HTTP Port'));
-	o.datatype = 'port';
-	o.placeholder = '80';
-
-	o = section.taboption('base', form.Value, 'vhost_https_port', _('Vhost HTTPS Port'));
-	o.datatype = 'port';
-	o.placeholder = '443';
-
-	o = section.taboption('transport', form.ListValue, 'protocol', _('Protocol Type'));
-	o.default = 'tcp';
-	addValues(o, [
-		[ 'tcp', _('TCP') ],
-		[ 'kcp', _('KCP') ],
-		[ 'quic', _('QUIC') ],
-		[ 'websocket', _('WebSocket') ],
-		[ 'wss', _('WebSocket over TLS') ]
-	]);
-
-	o = section.taboption('transport', form.Flag, 'login_fail_exit', _('Exit program when first login failed'));
-	o.default = '0';
-	o.rmempty = false;
-
-	o = section.taboption('transport', form.Flag, 'tcp_mux', _('TCP Stream Multiplexing'));
-	o.default = '1';
-	o.rmempty = false;
-
-	o = section.taboption('transport', form.Value, 'tcp_mux_keepalive_interval', _('TCP Mux Keepalive Interval'));
-	o.datatype = 'integer';
-	o.placeholder = _('Optional, seconds');
-
-	o = section.taboption('transport', form.Value, 'heartbeat_interval', _('Heartbeat Interval'));
-	o.datatype = 'integer';
-	o.placeholder = _('Optional, seconds');
-
-	o = section.taboption('transport', form.Value, 'heartbeat_timeout', _('Heartbeat Timeout'));
-	o.datatype = 'uinteger';
-	o.placeholder = _('Optional, seconds');
-
-	o = section.taboption('transport', form.Flag, 'tls_enable', _('Use TLS Connection'));
-	o.default = '1';
-	o.rmempty = false;
-
-	o = section.taboption('transport', form.Flag, 'enable_custom_certificate', _('Custom TLS Certificate'));
-	o.default = '0';
-	o.rmempty = false;
-	o.depends('tls_enable', '1');
-
-	o = section.taboption('transport', form.Value, 'tls_cert_file', _('Client Certificate File'));
-	o.placeholder = '/var/etc/multi-frpc/client.crt';
-	o.depends('enable_custom_certificate', '1');
-
-	o = section.taboption('transport', form.Value, 'tls_key_file', _('Client Key File'));
-	o.placeholder = '/var/etc/multi-frpc/client.key';
-	o.depends('enable_custom_certificate', '1');
-
-	o = section.taboption('transport', form.Value, 'tls_trusted_ca_file', _('CA Certificate File'));
-	o.placeholder = '/var/etc/multi-frpc/ca.crt';
-	o.depends('enable_custom_certificate', '1');
-
-	o = section.taboption('transport', form.Flag, 'enable_http_proxy', _('Connect frps by HTTP proxy'));
-	o.default = '0';
-	o.rmempty = false;
-	o.depends('protocol', 'tcp');
-
-	o = section.taboption('transport', form.Value, 'http_proxy', _('HTTP proxy'));
-	o.placeholder = 'http://user:pwd@192.168.1.128:8080';
-	o.depends('enable_http_proxy', '1');
-
-	o = section.taboption('transport', form.Flag, 'enable_cpool', _('Enable Connection Pool'));
-	o.default = '0';
-	o.rmempty = false;
-
-	o = section.taboption('transport', form.Value, 'pool_count', _('Connection Pool'));
-	o.datatype = 'uinteger';
-	o.default = '1';
-	o.depends('enable_cpool', '1');
-
-	o = section.taboption('log', form.ListValue, 'log_level', _('Log Level'));
-	o.default = 'info';
-	addValues(o, [
-		[ 'trace', _('Trace') ],
-		[ 'debug', _('Debug') ],
-		[ 'info', _('Info') ],
-		[ 'warn', _('Warning') ],
-		[ 'error', _('Error') ]
-	]);
-
-	o = section.taboption('log', form.Value, 'log_max_days', _('Log Keep Max Days'));
-	o.datatype = 'uinteger';
-	o.default = '3';
-	o.rmempty = false;
-
-	o = section.taboption('log', form.Flag, 'admin_enable', _('Enable Web API'));
-	o.default = '0';
-	o.rmempty = false;
-
-	o = section.taboption('log', form.Value, 'admin_port', _('Admin Web Port'));
-	o.datatype = 'port';
-	o.default = '7400';
-	o.depends('admin_enable', '1');
-
-	o = section.taboption('log', form.Value, 'admin_user', _('Admin Web UserName'));
-	o.depends('admin_enable', '1');
-
-	o = section.taboption('log', form.Value, 'admin_pwd', _('Admin Web PassWord'));
-	o.password = true;
-	o.depends('admin_enable', '1');
+	o.description = _('This only controls the multi-frpc service manager. Per-server transport, TLS, admin and log settings are configured in each server entry.');
 }
 
 function addServerOptions(section) {
@@ -273,6 +266,11 @@ function addServerOptions(section) {
 
 	o = section.taboption('base', form.Value, 'name', _('Server Name'));
 	o.rmempty = false;
+	o.write = function(section_id, value) {
+		uci.set(CONFIG, section_id, 'name', value);
+		if (!uci.get(CONFIG, section_id, 'server_key'))
+			uci.set(CONFIG, section_id, 'server_key', generateServerKey(section_id));
+	};
 	o.modalonly = true;
 
 	o = section.taboption('base', form.Flag, 'enabled', _('Enabled'));
@@ -296,6 +294,153 @@ function addServerOptions(section) {
 
 	o = section.taboption('base', form.Value, 'user', _('User'));
 	o.modalonly = true;
+
+	section.tab('transport', _('Transport'));
+	section.tab('tls', _('TLS'));
+	section.tab('admin', _('Admin'));
+	section.tab('log', _('Log'));
+
+	o = section.taboption('transport', form.ListValue, 'protocol', _('Protocol Type'));
+	addValues(o, [
+		[ 'tcp', _('TCP') ],
+		[ 'kcp', _('KCP') ],
+		[ 'quic', _('QUIC') ],
+		[ 'websocket', _('WebSocket') ],
+		[ 'wss', _('WebSocket over TLS') ]
+	]);
+	o.default = 'tcp';
+	applyInheritedServerOption(o, 'protocol', 'tcp');
+	o.modalonly = true;
+
+	o = section.taboption('transport', form.Flag, 'login_fail_exit', _('Exit program when first login failed'));
+	o.default = '0';
+	o.rmempty = false;
+	applyInheritedServerOption(o, 'login_fail_exit', '0');
+	o.modalonly = true;
+
+	o = section.taboption('transport', form.Flag, 'tcp_mux', _('TCP Stream Multiplexing'));
+	o.default = '1';
+	o.rmempty = false;
+	applyInheritedServerOption(o, 'tcp_mux', '1');
+	o.modalonly = true;
+
+	o = section.taboption('transport', form.Value, 'tcp_mux_keepalive_interval', _('TCP Mux Keepalive Interval'));
+	o.datatype = 'integer';
+	o.placeholder = _('Optional, seconds');
+	applyInheritedServerOption(o, 'tcp_mux_keepalive_interval', '');
+	o.modalonly = true;
+
+	o = section.taboption('transport', form.Value, 'heartbeat_interval', _('Heartbeat Interval'));
+	o.datatype = 'integer';
+	o.placeholder = _('Optional, seconds');
+	applyInheritedServerOption(o, 'heartbeat_interval', '');
+	o.modalonly = true;
+
+	o = section.taboption('transport', form.Value, 'heartbeat_timeout', _('Heartbeat Timeout'));
+	o.datatype = 'uinteger';
+	o.placeholder = _('Optional, seconds');
+	applyInheritedServerOption(o, 'heartbeat_timeout', '');
+	o.modalonly = true;
+
+	o = section.taboption('transport', form.Flag, 'enable_http_proxy', _('Connect frps by HTTP proxy'));
+	o.default = '0';
+	o.rmempty = false;
+	o.depends('protocol', 'tcp');
+	applyInheritedServerOption(o, 'enable_http_proxy', '0');
+	o.modalonly = true;
+
+	o = section.taboption('transport', form.Value, 'http_proxy', _('HTTP proxy'));
+	o.placeholder = 'http://user:pwd@192.168.1.128:8080';
+	o.depends('enable_http_proxy', '1');
+	applyInheritedServerOption(o, 'http_proxy', '');
+	o.modalonly = true;
+
+	o = section.taboption('transport', form.Flag, 'enable_cpool', _('Enable Connection Pool'));
+	o.default = '0';
+	o.rmempty = false;
+	applyInheritedServerOption(o, 'enable_cpool', '0');
+	o.modalonly = true;
+
+	o = section.taboption('transport', form.Value, 'pool_count', _('Connection Pool'));
+	o.datatype = 'uinteger';
+	o.placeholder = '1';
+	o.depends('enable_cpool', '1');
+	applyInheritedServerOption(o, 'pool_count', '1');
+	o.modalonly = true;
+
+	o = section.taboption('tls', form.Flag, 'tls_enable', _('Use TLS Connection'));
+	o.default = '1';
+	o.rmempty = false;
+	applyInheritedServerOption(o, 'tls_enable', '1');
+	o.modalonly = true;
+
+	o = section.taboption('tls', form.Flag, 'enable_custom_certificate', _('Custom TLS Certificate'));
+	o.default = '0';
+	o.rmempty = false;
+	o.depends('tls_enable', '1');
+	applyInheritedServerOption(o, 'enable_custom_certificate', '0');
+	o.modalonly = true;
+
+	o = section.taboption('tls', form.Value, 'tls_cert_file', _('Client Certificate File'));
+	o.placeholder = '/var/etc/multi-frpc/client.crt';
+	o.depends('enable_custom_certificate', '1');
+	applyInheritedServerOption(o, 'tls_cert_file', '');
+	o.modalonly = true;
+
+	o = section.taboption('tls', form.Value, 'tls_key_file', _('Client Key File'));
+	o.placeholder = '/var/etc/multi-frpc/client.key';
+	o.depends('enable_custom_certificate', '1');
+	applyInheritedServerOption(o, 'tls_key_file', '');
+	o.modalonly = true;
+
+	o = section.taboption('tls', form.Value, 'tls_trusted_ca_file', _('CA Certificate File'));
+	o.placeholder = '/var/etc/multi-frpc/ca.crt';
+	o.depends('enable_custom_certificate', '1');
+	applyInheritedServerOption(o, 'tls_trusted_ca_file', '');
+	o.modalonly = true;
+
+	o = section.taboption('admin', form.Flag, 'admin_enable', _('Enable Web API'));
+	o.default = '0';
+	o.rmempty = false;
+	applyInheritedServerOption(o, 'admin_enable', '0');
+	o.modalonly = true;
+
+	o = section.taboption('admin', form.Value, 'admin_port', _('Admin Web Port'));
+	o.datatype = 'port';
+	o.placeholder = _('Unique per server instance');
+	o.depends('admin_enable', '1');
+	applyInheritedServerOption(o, 'admin_port', '');
+	o.modalonly = true;
+
+	o = section.taboption('admin', form.Value, 'admin_user', _('Admin Web UserName'));
+	o.depends('admin_enable', '1');
+	applyInheritedServerOption(o, 'admin_user', '');
+	o.modalonly = true;
+
+	o = section.taboption('admin', form.Value, 'admin_pwd', _('Admin Web PassWord'));
+	o.password = true;
+	o.depends('admin_enable', '1');
+	applyInheritedServerOption(o, 'admin_pwd', '');
+	o.modalonly = true;
+
+	o = section.taboption('log', form.ListValue, 'log_level', _('Log Level'));
+	addValues(o, [
+		[ 'trace', _('Trace') ],
+		[ 'debug', _('Debug') ],
+		[ 'info', _('Info') ],
+		[ 'warn', _('Warning') ],
+		[ 'error', _('Error') ]
+	]);
+	o.default = 'info';
+	applyInheritedServerOption(o, 'log_level', 'info');
+	o.modalonly = true;
+
+	o = section.taboption('log', form.Value, 'log_max_days', _('Log Keep Max Days'));
+	o.datatype = 'uinteger';
+	o.default = '3';
+	o.rmempty = false;
+	applyInheritedServerOption(o, 'log_max_days', '3');
+	o.modalonly = true;
 }
 
 function addProxyOverview(section) {
@@ -310,13 +455,15 @@ function addProxyOverview(section) {
 	o = section.option(form.DummyValue, 'type', _('Type'));
 	o.modalonly = false;
 
-	o = section.option(form.DummyValue, 'remote_port', _('Remote Port'));
+	o = section.option(form.DummyValue, 'routing', _('Route'));
 	o.cfgvalue = function(section_id) {
 		var type = uci.get(CONFIG, section_id, 'type');
-		if (type == 'http')
-			return uci.get(CONFIG, 'common', 'vhost_http_port') || '';
-		if (type == 'https')
-			return uci.get(CONFIG, 'common', 'vhost_https_port') || '';
+		var custom_domains = uci.get(CONFIG, section_id, 'custom_domains') || '';
+		var subdomain = uci.get(CONFIG, section_id, 'subdomain') || '';
+
+		if (type == 'http' || type == 'https')
+			return custom_domains || subdomain || _('VHost');
+
 		return uci.get(CONFIG, section_id, 'remote_port') || '';
 	};
 	o.modalonly = false;
@@ -633,6 +780,8 @@ function addProxyOptions(section) {
 return view.extend({
 	load: function() {
 		return uci.load(CONFIG).then(function() {
+			normalizeConfigState();
+
 			var tasks = [
 				L.resolveDefault(callServiceList(SERVICE), {}),
 				readLog('%s/multi-frpc.log'.format(RUNDIR))
@@ -641,7 +790,7 @@ return view.extend({
 
 			for (var i = 0; i < servers.length; i++) {
 				var name = uci.get(CONFIG, servers[i]['.name'], 'name') || servers[i]['.name'];
-				tasks.push(readLog('%s/frpc-%s.log'.format(RUNDIR, name)));
+				tasks.push(readLog('%s/frpc-%s.log'.format(RUNDIR, serverKey(servers[i]['.name']))));
 			}
 
 			return Promise.all(tasks);
@@ -663,11 +812,12 @@ return view.extend({
 	},
 
 	render: function(data) {
-		var m, s, servers, logNodes, statusData, mainLog;
+		var m, s, servers, logNodes, statusData, mainLog, serverNames;
 		var logIndex = 2;
 
 		statusData = data[0] || {};
 		mainLog = data[1] || '';
+		serverNames = buildServerNameMap();
 
 		m = new form.Map(CONFIG, _('Multi Frpc Setting'),
 			_('Manage multiple frpc client instances with frp TOML configuration.'));
@@ -710,7 +860,7 @@ return view.extend({
 
 		return m.render().then(L.bind(function(nodes) {
 			return E('div', {}, [
-				renderStatus(getServiceInstances(statusData)),
+				renderStatus(getServiceInstances(statusData), serverNames),
 				renderActions(this),
 				nodes,
 				E('div', { 'class': 'cbi-section' }, [
