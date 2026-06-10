@@ -18,7 +18,7 @@ LUCI_PKGARCH:=all
 
 PKG_NAME:=luci-app-multi-frpc
 PKG_VERSION:=1.0.1
-PKG_RELEASE:=12
+PKG_RELEASE:=13
 
 define Package/$(PKG_NAME)/conffiles
 /etc/config/multi-frpc
