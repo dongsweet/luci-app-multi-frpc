@@ -148,6 +148,21 @@ function buildServerNameMap() {
 	return map;
 }
 
+function isUniqueOptionValue(sectionType, currentId, optionName, value) {
+	var sections = uci.sections(CONFIG, sectionType);
+
+	for (var i = 0; i < sections.length; i++) {
+		var otherId = sections[i]['.name'];
+		if (otherId === currentId)
+			continue;
+
+		if ((uci.get(CONFIG, otherId, optionName) || '') === value)
+			return false;
+	}
+
+	return true;
+}
+
 function getServiceInstances(data) {
 	var service = data && data[SERVICE];
 	return (service && service.instances) ? service.instances : {};
@@ -266,6 +281,13 @@ function addServerOptions(section) {
 
 	o = section.taboption('base', form.Value, 'name', _('Server Name'));
 	o.rmempty = false;
+	o.validate = function(section_id, value) {
+		if (!value)
+			return _('Server name is required');
+		if (!isUniqueOptionValue('server', section_id, 'name', value))
+			return _('Server name must be unique');
+		return true;
+	};
 	o.write = function(section_id, value) {
 		uci.set(CONFIG, section_id, 'name', value);
 		if (!uci.get(CONFIG, section_id, 'server_key'))
@@ -493,8 +515,14 @@ function addProxyOptions(section) {
 	section.tab('transport', _('Transport'));
 
 	o = section.taboption('base', form.Value, 'remark', _('Service Remark Name'));
-	o.description = _('Please ensure the remark name is unique.');
 	o.rmempty = false;
+	o.validate = function(section_id, value) {
+		if (!value)
+			return _('Service name is required');
+		if (!isUniqueOptionValue('proxy', section_id, 'remark', value))
+			return _('Service name must be unique');
+		return true;
+	};
 	o.modalonly = true;
 
 	o = section.taboption('base', form.Flag, 'enable', _('Enabled'));
