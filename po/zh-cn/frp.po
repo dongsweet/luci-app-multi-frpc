@@ -402,3 +402,39 @@ msgstr "概览"
 
 msgid "Configuration"
 msgstr "配置"
+
+msgid "Disabled"
+msgstr "禁用"
+
+msgid "Manager"
+msgstr "管理器"
+
+msgid "Servers"
+msgstr "服务器"
+
+msgid "Services"
+msgstr "服务"
+
+msgid "Controls whether the multi-frpc service manager starts any frpc instances."
+msgstr "控制 multi-frpc 服务管理器是否启动任意 frpc 实例。"
+
+msgid "%s enabled / %s total"
+msgstr "已启用 %s / 共 %s"
+
+msgid "Each completed server can spawn one dedicated frpc instance and TOML file."
+msgstr "每个填写完整的服务器都可以生成一个独立的 frpc 实例和 TOML 文件。"
+
+msgid "Enabled services are assigned to every eligible server unless explicitly excluded."
+msgstr "除非显式排除，否则已启用服务会分配到所有符合条件的服务器。"
+
+msgid "No completed server is available yet. Complete and save at least one server entry, then come back here to exclude it from this service."
+msgstr "当前还没有可用的完整服务器。请先填写并保存至少一个服务器，再回来为当前服务设置排除项。"
+
+msgid "Runtime status and service control"
+msgstr "运行状态与服务控制"
+
+msgid "Global settings, servers and services"
+msgstr "全局设置、服务器与服务"
+
+msgid "Manager and per-instance log output"
+msgstr "管理器和各实例日志输出"

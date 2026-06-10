@@ -1,20 +1,3 @@
 
 config multi-frpc 'common'
 	option enabled '0'
-
-config server
-	option name 'Default'
-	option enabled '0'
-	option server_addr ''
-	option server_port ''
-	option token ''
-	option user ''
-	option protocol 'tcp'
-	option login_fail_exit '0'
-	option tcp_mux '1'
-	option tls_enable '1'
-	option enable_http_proxy '0'
-	option enable_cpool '0'
-	option log_level 'info'
-	option log_max_days '3'
-	option admin_enable '0'

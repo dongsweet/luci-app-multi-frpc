@@ -172,11 +172,11 @@ function getSelectableServers() {
 	return result;
 }
 
-function refreshServerChoices(option) {
+function refreshServerChoices(option, servers) {
 	option.keylist = [];
 	option.vallist = [];
 
-	var servers = getSelectableServers();
+	servers = servers || getSelectableServers();
 
 	for (var i = 0; i < servers.length; i++)
 		option.value(servers[i].key, servers[i].label);
@@ -284,6 +284,46 @@ function renderLog(title, content) {
 	]);
 }
 
+function renderOverviewCards() {
+	var servers = uci.sections(CONFIG, 'server');
+	var proxies = uci.sections(CONFIG, 'proxy');
+	var enabledServers = 0;
+	var enabledServices = 0;
+	var cards = [];
+
+	for (var i = 0; i < servers.length; i++)
+		if (uci.get(CONFIG, servers[i]['.name'], 'enabled') == '1')
+			enabledServers++;
+
+	for (var j = 0; j < proxies.length; j++)
+		if (uci.get(CONFIG, proxies[j]['.name'], 'enable') != '0')
+			enabledServices++;
+
+	cards.push([
+		_('Manager'),
+		uci.get(CONFIG, 'common', 'enabled') == '1' ? _('Enabled') : _('Disabled'),
+		_('Controls whether the multi-frpc service manager starts any frpc instances.')
+	]);
+	cards.push([
+		_('Servers'),
+		_('%s enabled / %s total').format(enabledServers, servers.length),
+		_('Each completed server can spawn one dedicated frpc instance and TOML file.')
+	]);
+	cards.push([
+		_('Services'),
+		_('%s enabled / %s total').format(enabledServices, proxies.length),
+		_('Enabled services are assigned to every eligible server unless explicitly excluded.')
+	]);
+
+	return E('div', { 'class': 'multi-frpc-overview-grid' }, cards.map(function(card) {
+		return E('div', { 'class': 'multi-frpc-overview-card' }, [
+			E('div', { 'class': 'multi-frpc-overview-label' }, card[0]),
+			E('div', { 'class': 'multi-frpc-overview-value' }, card[1]),
+			E('div', { 'class': 'multi-frpc-overview-help' }, card[2])
+		]);
+	}));
+}
+
 function renderTopLevelTabs(panes) {
 	var tabs = [];
 	var content = [];
@@ -291,18 +331,24 @@ function renderTopLevelTabs(panes) {
 	function activate(id) {
 		for (var i = 0; i < tabs.length; i++) {
 			var active = tabs[i].dataset.tab === id;
-			tabs[i].classList.toggle('cbi-tab', !active);
-			tabs[i].classList.toggle('cbi-tab-active', active);
+			tabs[i].classList.toggle('active', active);
+			tabs[i].setAttribute('aria-selected', active ? 'true' : 'false');
 		}
 
-		for (var j = 0; j < content.length; j++)
-			content[j].style.display = (content[j].dataset.tab === id) ? '' : 'none';
+		for (var j = 0; j < content.length; j++) {
+			var visible = content[j].dataset.tab === id;
+			content[j].style.display = visible ? '' : 'none';
+			content[j].setAttribute('aria-hidden', visible ? 'false' : 'true');
+		}
 	}
 
 	for (var i = 0; i < panes.length; i++) {
 		var pane = panes[i];
 		var button = E('button', {
-			'class': i === 0 ? 'cbi-tab-active' : 'cbi-tab',
+			'class': 'multi-frpc-nav-link%s'.format(i === 0 ? ' active' : ''),
+			'type': 'button',
+			'role': 'tab',
+			'aria-selected': i === 0 ? 'true' : 'false',
 			'data-tab': pane.id,
 			'click': (function(id) {
 				return function(ev) {
@@ -310,10 +356,16 @@ function renderTopLevelTabs(panes) {
 					activate(id);
 				};
 			})(pane.id)
-		}, pane.title);
+		}, [
+			E('span', { 'class': 'multi-frpc-nav-title' }, pane.title),
+			pane.caption ? E('span', { 'class': 'multi-frpc-nav-caption' }, pane.caption) : ''
+		]);
 		var panel = E('div', {
+			'class': 'multi-frpc-panel',
+			'role': 'tabpanel',
 			'data-tab': pane.id,
-			'style': i === 0 ? '' : 'display:none'
+			'style': i === 0 ? '' : 'display:none',
+			'aria-hidden': i === 0 ? 'false' : 'true'
 		}, pane.nodes);
 
 		tabs.push(button);
@@ -322,17 +374,95 @@ function renderTopLevelTabs(panes) {
 
 	return E('div', { 'class': 'cbi-map' }, [
 		E('style', {}, `
-			.multi-frpc-top-tabs {
+			.multi-frpc-shell {
+				display: block;
+			}
+			.multi-frpc-nav {
 				display: flex;
 				flex-wrap: wrap;
-				gap: 6px;
+				gap: 10px;
 				margin: 0 0 1rem 0;
 			}
-			.multi-frpc-top-tabs > button {
+			.multi-frpc-nav-link {
 				cursor: pointer;
+				display: flex;
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 2px;
+				min-width: 12rem;
+				padding: 0.85rem 1rem;
+				border: 1px solid #d7dce3;
+				border-radius: 14px;
+				background: linear-gradient(180deg, #fbfcfe 0%, #f1f4f8 100%);
+				color: inherit;
+				box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+				transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease, background 0.15s ease;
+			}
+			.multi-frpc-nav-link:hover {
+				border-color: #7aa2f7;
+				box-shadow: 0 8px 20px rgba(45, 90, 160, 0.08);
+				transform: translateY(-1px);
+			}
+			.multi-frpc-nav-link.active {
+				border-color: #2d5aa0;
+				background: linear-gradient(135deg, #2d5aa0 0%, #4d84d8 100%);
+				color: #fff;
+				box-shadow: 0 10px 24px rgba(45, 90, 160, 0.22);
+			}
+			.multi-frpc-nav-title {
+				font-size: 1rem;
+				font-weight: 600;
+				line-height: 1.2;
+			}
+			.multi-frpc-nav-caption {
+				font-size: 0.82rem;
+				opacity: 0.82;
+				line-height: 1.35;
+				text-align: left;
+			}
+			.multi-frpc-panel {
+				display: block;
+			}
+			.multi-frpc-overview-grid {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+				gap: 12px;
+				margin-bottom: 1rem;
+			}
+			.multi-frpc-overview-card {
+				padding: 1rem 1.1rem;
+				border: 1px solid #d7dce3;
+				border-radius: 14px;
+				background: linear-gradient(180deg, #ffffff 0%, #f6f8fb 100%);
+				box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+			}
+			.multi-frpc-overview-label {
+				font-size: 0.82rem;
+				font-weight: 600;
+				color: #5b6679;
+				text-transform: uppercase;
+				letter-spacing: 0.04em;
+			}
+			.multi-frpc-overview-value {
+				margin-top: 0.35rem;
+				font-size: 1.3rem;
+				font-weight: 700;
+				line-height: 1.2;
+				color: #1d293d;
+			}
+			.multi-frpc-overview-help {
+				margin-top: 0.5rem;
+				font-size: 0.88rem;
+				line-height: 1.45;
+				color: #5b6679;
+			}
+			@media (max-width: 640px) {
+				.multi-frpc-nav-link {
+					min-width: 100%;
+				}
 			}
 		`),
-		E('div', { 'class': 'multi-frpc-top-tabs' }, tabs),
+		E('div', { 'class': 'multi-frpc-nav', 'role': 'tablist' }, tabs),
 		E('div', {}, content)
 	]);
 }
@@ -633,7 +763,13 @@ function addProxyOptions(section) {
 	o.widget = 'checkbox';
 	o.description = _('By default, every enabled service is assigned to every enabled frpc server instance. Select any completed server here to skip it for this service.');
 	o.load = function(section_id) {
-		refreshServerChoices(this);
+		var servers = getSelectableServers();
+
+		this.description = servers.length
+			? _('By default, every enabled service is assigned to every enabled frpc server instance. Select any completed server here to skip it for this service.')
+			: _('No completed server is available yet. Complete and save at least one server entry, then come back here to exclude it from this service.');
+
+		refreshServerChoices(this, servers);
 		return form.MultiValue.prototype.load.call(this, section_id);
 	};
 	o.modalonly = true;
@@ -979,7 +1115,9 @@ return view.extend({
 				{
 					id: 'overview',
 					title: _('Overview'),
+					caption: _('Runtime status and service control'),
 					nodes: [
+						renderOverviewCards(),
 						renderStatus(getServiceInstances(statusData), serverNames),
 						renderActions(this)
 					]
@@ -987,11 +1125,13 @@ return view.extend({
 				{
 					id: 'configuration',
 					title: _('Configuration'),
+					caption: _('Global settings, servers and services'),
 					nodes: [ nodes ]
 				},
 				{
 					id: 'logs',
 					title: _('Logs'),
+					caption: _('Manager and per-instance log output'),
 					nodes: [
 						E('div', { 'class': 'cbi-section' }, [
 							E('h2', _('Logs')),
