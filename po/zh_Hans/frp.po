@@ -393,3 +393,12 @@ msgstr "服务名称不能为空"
 
 msgid "Service name must be unique"
 msgstr "服务名称必须唯一"
+
+msgid "By default, every enabled service is assigned to every enabled frpc server instance. Select any completed server here to skip it for this service."
+msgstr "默认情况下，每个已启用服务都会分配到所有已启用的 frpc 服务器实例。这里仅显示已填写完整的服务器，可选择其中任意服务器将当前服务排除。"
+
+msgid "Overview"
+msgstr "概览"
+
+msgid "Configuration"
+msgstr "配置"

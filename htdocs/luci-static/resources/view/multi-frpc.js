@@ -148,6 +148,40 @@ function buildServerNameMap() {
 	return map;
 }
 
+function getSelectableServers() {
+	var sections = uci.sections(CONFIG, 'server');
+	var result = [];
+
+	for (var i = 0; i < sections.length; i++) {
+		var section_id = sections[i]['.name'];
+		var name = uci.get(CONFIG, section_id, 'name') || '';
+		var addr = uci.get(CONFIG, section_id, 'server_addr') || '';
+		var port = uci.get(CONFIG, section_id, 'server_port') || '';
+		var key = serverKey(section_id);
+
+		if (!name || !addr || !port || !key)
+			continue;
+
+		result.push({
+			section_id: section_id,
+			key: key,
+			label: serverLabel(sections[i])
+		});
+	}
+
+	return result;
+}
+
+function refreshServerChoices(option) {
+	option.keylist = [];
+	option.vallist = [];
+
+	var servers = getSelectableServers();
+
+	for (var i = 0; i < servers.length; i++)
+		option.value(servers[i].key, servers[i].label);
+}
+
 function isUniqueOptionValue(sectionType, currentId, optionName, value) {
 	var sections = uci.sections(CONFIG, sectionType);
 
@@ -247,6 +281,59 @@ function renderLog(title, content) {
 			'wrap': 'off',
 			'style': 'width:100%; min-height:18em; font-family:monospace'
 		}, [ content || '' ])
+	]);
+}
+
+function renderTopLevelTabs(panes) {
+	var tabs = [];
+	var content = [];
+
+	function activate(id) {
+		for (var i = 0; i < tabs.length; i++) {
+			var active = tabs[i].dataset.tab === id;
+			tabs[i].classList.toggle('cbi-tab', !active);
+			tabs[i].classList.toggle('cbi-tab-active', active);
+		}
+
+		for (var j = 0; j < content.length; j++)
+			content[j].style.display = (content[j].dataset.tab === id) ? '' : 'none';
+	}
+
+	for (var i = 0; i < panes.length; i++) {
+		var pane = panes[i];
+		var button = E('button', {
+			'class': i === 0 ? 'cbi-tab-active' : 'cbi-tab',
+			'data-tab': pane.id,
+			'click': (function(id) {
+				return function(ev) {
+					ev.preventDefault();
+					activate(id);
+				};
+			})(pane.id)
+		}, pane.title);
+		var panel = E('div', {
+			'data-tab': pane.id,
+			'style': i === 0 ? '' : 'display:none'
+		}, pane.nodes);
+
+		tabs.push(button);
+		content.push(panel);
+	}
+
+	return E('div', { 'class': 'cbi-map' }, [
+		E('style', {}, `
+			.multi-frpc-top-tabs {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 6px;
+				margin: 0 0 1rem 0;
+			}
+			.multi-frpc-top-tabs > button {
+				cursor: pointer;
+			}
+		`),
+		E('div', { 'class': 'multi-frpc-top-tabs' }, tabs),
+		E('div', {}, content)
 	]);
 }
 
@@ -544,10 +631,11 @@ function addProxyOptions(section) {
 
 	o = section.taboption('base', form.MultiValue, 'exclude_server', _('Exclude Servers'));
 	o.widget = 'checkbox';
-	o.description = _('By default, every enabled service is assigned to every enabled frpc server instance. Select any server here to skip it for this service.');
-	servers = uci.sections(CONFIG, 'server');
-	for (var i = 0; i < servers.length; i++)
-		o.value(servers[i]['.name'], serverLabel(servers[i]));
+	o.description = _('By default, every enabled service is assigned to every enabled frpc server instance. Select any completed server here to skip it for this service.');
+	o.load = function(section_id) {
+		refreshServerChoices(this);
+		return form.MultiValue.prototype.load.call(this, section_id);
+	};
 	o.modalonly = true;
 
 	o = section.taboption('base', form.ListValue, 'stcp_role', _('STCP Role'));
@@ -887,15 +975,31 @@ return view.extend({
 		}
 
 		return m.render().then(L.bind(function(nodes) {
-			return E('div', {}, [
-				renderStatus(getServiceInstances(statusData), serverNames),
-				renderActions(this),
-				nodes,
-				E('div', { 'class': 'cbi-section' }, [
-					E('h2', _('Logs')),
-					E('p', {}, _('Logs are read from /var/etc/multi-frpc. Restart the service after saving configuration changes to regenerate TOML files.'))
-				]),
-				E('div', {}, logNodes)
+			return renderTopLevelTabs([
+				{
+					id: 'overview',
+					title: _('Overview'),
+					nodes: [
+						renderStatus(getServiceInstances(statusData), serverNames),
+						renderActions(this)
+					]
+				},
+				{
+					id: 'configuration',
+					title: _('Configuration'),
+					nodes: [ nodes ]
+				},
+				{
+					id: 'logs',
+					title: _('Logs'),
+					nodes: [
+						E('div', { 'class': 'cbi-section' }, [
+							E('h2', _('Logs')),
+							E('p', {}, _('Logs are read from /var/etc/multi-frpc. Restart the service after saving configuration changes to regenerate TOML files.'))
+						]),
+						E('div', {}, logNodes)
+					]
+				}
 			]);
 		}, this));
 	}
