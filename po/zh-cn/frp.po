@@ -345,3 +345,51 @@ msgstr "选择一个配置"
 
 msgid "Reload"
 msgstr "刷新"
+
+msgid "This only controls the multi-frpc service manager. Per-server transport, TLS, admin and log settings are configured in each server entry."
+msgstr "这里只控制 multi-frpc 服务管理器本身。每个服务器实例的传输、TLS、管理接口和日志设置都在对应的服务器条目中单独配置。"
+
+msgid "Server name is required"
+msgstr "服务器名称不能为空"
+
+msgid "Server name must be unique"
+msgstr "服务器名称必须唯一"
+
+msgid "Unique per server instance"
+msgstr "每个服务器实例都必须唯一"
+
+msgid "Route"
+msgstr "路由"
+
+msgid "VHost"
+msgstr "虚拟主机"
+
+msgid "Backend Health Check"
+msgstr "后端健康检查"
+
+msgid "Enable Backend Health Check"
+msgstr "启用后端健康检查"
+
+msgid "Use frp built-in backend health checks. When the local service fails repeatedly, frp will temporarily remove this proxy from frps until the backend recovers."
+msgstr "使用 frp 内置的后端健康检查。当本地服务连续失败时，frp 会暂时将该代理从 frps 下线，直到后端恢复后再重新注册。"
+
+msgid "Backend Health Check Type"
+msgstr "后端健康检查类型"
+
+msgid "Backend Health Check Path"
+msgstr "后端健康检查路径"
+
+msgid "Backend Health Check Interval"
+msgstr "后端健康检查间隔"
+
+msgid "Backend Health Check Timeout"
+msgstr "后端健康检查超时"
+
+msgid "Backend Health Check Max Failed"
+msgstr "后端健康检查最大失败次数"
+
+msgid "Service name is required"
+msgstr "服务名称不能为空"
+
+msgid "Service name must be unique"
+msgstr "服务名称必须唯一"

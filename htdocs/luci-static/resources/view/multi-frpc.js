@@ -511,7 +511,7 @@ function addProxyOptions(section) {
 	section.tab('base', _('Basic Settings'));
 	section.tab('routing', _('Routing'));
 	section.tab('plugin', _('Plugin'));
-	section.tab('health', _('Health Check'));
+	section.tab('health', _('Backend Health Check'));
 	section.tab('transport', _('Transport'));
 
 	o = section.taboption('base', form.Value, 'remark', _('Service Remark Name'));
@@ -739,8 +739,8 @@ function addProxyOptions(section) {
 		{ enable_health_check: '1', type: 'https' }
 	];
 
-	o = section.taboption('health', form.Flag, 'enable_health_check', _('Enable Health Check'));
-	o.description = _('Use frp built-in health checks instead of periodic restarts.');
+	o = section.taboption('health', form.Flag, 'enable_health_check', _('Enable Backend Health Check'));
+	o.description = _('Use frp built-in backend health checks. When the local service fails repeatedly, frp will temporarily remove this proxy from frps until the backend recovers.');
 	o.default = '0';
 	o.rmempty = false;
 	o.depends('type', 'tcp');
@@ -748,14 +748,14 @@ function addProxyOptions(section) {
 	o.depends('type', 'https');
 	o.modalonly = true;
 
-	o = section.taboption('health', form.ListValue, 'health_check_type', _('Health Check Type'));
+	o = section.taboption('health', form.ListValue, 'health_check_type', _('Backend Health Check Type'));
 	o.default = 'tcp';
 	o.value('tcp', _('TCP'));
 	o.value('http', _('HTTP'));
 	addDepends(o, dependsHealthCheck);
 	o.modalonly = true;
 
-	o = section.taboption('health', form.Value, 'health_check_path', _('Health Check Path'));
+	o = section.taboption('health', form.Value, 'health_check_path', _('Backend Health Check Path'));
 	o.placeholder = '/';
 	addDepends(o, [
 		{ enable_health_check: '1', health_check_type: 'http', type: 'tcp' },
@@ -764,19 +764,19 @@ function addProxyOptions(section) {
 	]);
 	o.modalonly = true;
 
-	o = section.taboption('health', form.Value, 'health_check_interval', _('Health Check Interval'));
+	o = section.taboption('health', form.Value, 'health_check_interval', _('Backend Health Check Interval'));
 	o.datatype = 'uinteger';
 	o.placeholder = '10';
 	addDepends(o, dependsHealthCheck);
 	o.modalonly = true;
 
-	o = section.taboption('health', form.Value, 'health_check_timeout', _('Health Check Timeout'));
+	o = section.taboption('health', form.Value, 'health_check_timeout', _('Backend Health Check Timeout'));
 	o.datatype = 'uinteger';
 	o.placeholder = '3';
 	addDepends(o, dependsHealthCheck);
 	o.modalonly = true;
 
-	o = section.taboption('health', form.Value, 'health_check_max_failed', _('Health Check Max Failed'));
+	o = section.taboption('health', form.Value, 'health_check_max_failed', _('Backend Health Check Max Failed'));
 	o.datatype = 'uinteger';
 	o.placeholder = '1';
 	addDepends(o, dependsHealthCheck);
